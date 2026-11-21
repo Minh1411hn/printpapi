@@ -72,6 +72,9 @@ pub struct PrinterChoice {
     pdf: bool,
     target: Option<String>,
     locked: bool,
+    /// SumatraPDF's page scaling for a PDF printer (`config::SCALES`), `None` for "Not set".
+    #[serde(default)]
+    scale: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -178,8 +181,11 @@ fn install_state(supported: bool, detect: impl FnOnce() -> Installed) -> &'stati
 
 // ---- pure helpers
 
+/// The scaling goes along as it is: `format_printers` refuses a word outside `config::SCALES`
+/// and leaves it out for a printer that takes no PDF.
 pub fn choice_to_printer(c: &PrinterChoice) -> Printer {
     Printer::new(&c.name, c.pdf, c.target.as_deref().unwrap_or(&c.name))
+        .with_scale(c.scale.as_deref())
 }
 
 /// A printer of the installed `agent.ini`. A `file://` target is kept as it is and locked: the
@@ -190,6 +196,7 @@ pub fn printer_to_choice(p: &Printer) -> PrinterChoice {
         pdf: p.can_pdf,
         target: (p.target != p.name).then(|| p.target.clone()),
         locked: p.target.starts_with("file://"),
+        scale: p.scale.clone(),
     }
 }
 
@@ -1049,7 +1056,33 @@ mod tests {
             pdf,
             target: target.map(String::from),
             locked: false,
+            scale: None,
         }
+    }
+
+    #[test]
+    fn the_scaling_of_a_choice_reaches_agent_ini_and_comes_back() {
+        let mut hp = choice("HP", true, None);
+        hp.scale = Some("noscale".into());
+        let text = format_printers(&[choice_to_printer(&hp)]).unwrap();
+        assert_eq!(text, "HP|pdf|noscale");
+        let back: Vec<_> = parse_printers(&text).unwrap().iter().map(printer_to_choice).collect();
+        assert_eq!(back, [hp]);
+    }
+
+    #[test]
+    fn a_choice_from_a_window_without_scaling_reads_as_not_set() {
+        let c: PrinterChoice =
+            serde_json::from_value(json!({"name": "HP", "pdf": true, "target": null, "locked": false}))
+                .unwrap();
+        assert_eq!(c, choice("HP", true, None));
+    }
+
+    #[test]
+    fn an_unknown_scaling_from_the_window_is_refused_before_the_prompt() {
+        let mut hp = choice("HP", true, None);
+        hp.scale = Some("zoom".into());
+        assert!(format_printers(&[choice_to_printer(&hp)]).is_err());
     }
 
     #[test]

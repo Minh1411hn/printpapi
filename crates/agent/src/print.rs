@@ -12,7 +12,8 @@ use serde_json::{Map, Value};
 use crate::config::{Capabilities, Printer, file_target_dir};
 use crate::pyrepr::{py_str, repr_str, truthy};
 
-/// A job's `options` (duplex/paper/bin/color/pages/orientation, validated by the server).
+/// A job's `options` (duplex/paper/bin/color/pages/orientation, validated by the server), plus
+/// `scale`, which the agent adds itself from the printer's entry in agent.ini.
 pub type Options = Map<String, Value>;
 pub type SendResult = Result<(), String>;
 pub type RawFn = Box<dyn Fn(&str, &[u8]) -> SendResult>;
@@ -118,6 +119,14 @@ pub fn sumatra_settings(options: &Options) -> Result<String, String> {
             "portrait" | "landscape" => parts.push(v),
             _ => return Err(format!("unknown orientation value {}", repr_str(&v))),
         }
+    }
+    // The printer's scaling from agent.ini (`print_job` adds it), one of Sumatra's own words.
+    if options.contains_key("scale") {
+        let v = opt_str(options, "scale")?;
+        if !crate::config::SCALES.contains(&v.as_str()) {
+            return Err(format!("unknown scale value {}", repr_str(&v)));
+        }
+        parts.push(v);
     }
     Ok(parts.join(","))
 }
@@ -296,6 +305,13 @@ pub fn print_job(
         return Err(format!("copies must be at most {MAX_COPIES}, got {copies}"));
     }
     let options = options.filter(|o| !o.is_empty());
+    // The printer's scaling (agent.ini `|pdf|fit`) goes along as one more option of a PDF job.
+    let scaled = entry.scale.as_ref().filter(|_| mode == "pdf").map(|s| {
+        let mut o = options.cloned().unwrap_or_default();
+        o.insert("scale".into(), Value::String(s.clone()));
+        o
+    });
+    let options = scaled.as_ref().or(options);
     // ponytail: loop the whole send per copy — correct on every backend without a per-driver
     // copies flag (win32/Sumatra/CUPS/socket differ). Native flags (lp -n, Sumatra "Nx") would
     // be one call instead of N; not worth the branching for the small copy counts labels use.
@@ -490,6 +506,54 @@ pub(crate) mod tests {
         assert_eq!(
             sumatra_settings(&obj(json!({"orientation": "auto"}))).unwrap(),
             ""
+        );
+    }
+
+    #[test]
+    fn scale_is_sumatras_own_word() {
+        for v in crate::config::SCALES {
+            assert_eq!(sumatra_settings(&obj(json!({"scale": v}))).unwrap(), v);
+        }
+        assert_eq!(
+            sumatra_settings(&obj(json!({"paper": "A4", "scale": "fit"}))).unwrap(),
+            "paper=A4,fit"
+        );
+        assert_eq!(
+            sumatra_settings(&obj(json!({"scale": "zoom"}))).unwrap_err(),
+            "unknown scale value 'zoom'"
+        );
+    }
+
+    // ponytail: scaling is a SumatraPDF setting; CUPS gets nothing for it (Windows only).
+    #[test]
+    fn cups_gets_no_scale_flag() {
+        assert!(lp_options(&obj(json!({"scale": "fit"}))).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_pdf_job_carries_the_scaling_of_its_printer() {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let s = seen.clone();
+        let fns = Fns {
+            pdf: Box::new(move |_, _, o| {
+                s.borrow_mut().push(o.cloned());
+                Ok(())
+            }),
+            ..Fns::refusing()
+        };
+        let hp = entry("HP", true, "HP").with_scale(Some("noscale"));
+        print_job("pdf", &hp, b"%PDF", 1, None, &fns, None).unwrap();
+        let opts = obj(json!({"paper": "A4"}));
+        print_job("pdf", &hp, b"%PDF", 1, Some(&opts), &fns, None).unwrap();
+        // no scaling set: the job's options pass as they are
+        print_job("pdf", &entry("HP", true, "HP"), b"%PDF", 1, None, &fns, None).unwrap();
+        assert_eq!(
+            *seen.borrow(),
+            vec![
+                Some(obj(json!({"scale": "noscale"}))),
+                Some(obj(json!({"paper": "A4", "scale": "noscale"}))),
+                None,
+            ]
         );
     }
 

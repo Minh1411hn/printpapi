@@ -161,6 +161,10 @@ impl Config {
     }
 }
 
+/// The page scaling words of SumatraPDF's `-print-settings`, which a PDF printer may name in
+/// agent.ini (`HP|pdf|fit`). Without one, nothing is sent and SumatraPDF uses its own default.
+pub const SCALES: [&str; 4] = ["fit", "shrink", "noscale", "stretch"];
+
 /// One entry of the agent.ini `printers` list, as registered with the server.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Printer {
@@ -168,6 +172,8 @@ pub struct Printer {
     pub can_pdf: bool,
     pub target: String,
     pub capabilities: Option<Capabilities>,
+    /// One of [`SCALES`], for PDF jobs. A setting of this machine: never sent to the server.
+    pub scale: Option<String>,
 }
 
 impl Printer {
@@ -177,7 +183,13 @@ impl Printer {
             can_pdf,
             target: target.into(),
             capabilities: None,
+            scale: None,
         }
+    }
+
+    pub fn with_scale(mut self, scale: Option<&str>) -> Printer {
+        self.scale = scale.map(str::to_string);
+        self
     }
 
     /// The JSON the server's register endpoint takes (and Python's dict repr prints).
@@ -278,7 +290,7 @@ fn is_local_authority(authority: &str) -> bool {
 }
 
 /// agent.ini `printers` (semicolon-separated) -> printers.
-/// Grammar: `name [|pdf] [= target]`.
+/// Grammar: `name [|pdf [|scale]] [= target]`, `scale` one of [`SCALES`].
 ///   - no `=`  -> target is the name (a CUPS queue / Windows printer).
 ///   - `= socket://host:port` -> agent opens a raw TCP socket to it.
 ///   - `= file:///path/to/dir` -> agent writes the job into that directory (no paper).
@@ -286,12 +298,16 @@ fn is_local_authority(authority: &str) -> bool {
 /// Append `|pdf` to declare a document printer PDF-capable; default is raw-only so a label
 /// printer is never auto-sent a PDF (gotcha #1). A socket:// target is always raw-only, a
 /// file:// target always takes both (a directory cannot misrender anything).
+///
+/// A scaling word after `|pdf` sets how SumatraPDF fits the page to the paper. It is kept only for
+/// a PDF printer with paper behind it (not socket:// or file://). A tag the agent does not know is
+/// skipped, as it always was.
 pub fn parse_printers(spec: &str) -> Result<Vec<Printer>, String> {
     let mut out = Vec::new();
     for entry in spec.split(';') {
         let (left, target) = entry.split_once('=').unwrap_or((entry, ""));
-        let (name, tag) = left.trim().split_once('|').unwrap_or((left.trim(), ""));
-        let name = name.trim();
+        let mut parts = left.split('|');
+        let name = parts.next().unwrap_or("").trim();
         if name.is_empty() {
             continue;
         }
@@ -299,7 +315,15 @@ pub fn parse_printers(spec: &str) -> Result<Vec<Printer>, String> {
             "" => name,
             t => t,
         };
-        let mut can_pdf = tag.trim().to_lowercase() == "pdf";
+        let mut can_pdf = false;
+        let mut scale = None;
+        for tag in parts.map(|t| t.trim().to_lowercase()) {
+            if tag == "pdf" {
+                can_pdf = true;
+            } else if let Some(s) = SCALES.iter().find(|s| **s == tag) {
+                scale = Some(*s);
+            }
+        }
         if let Some(addr) = target.strip_prefix("socket://") {
             can_pdf = false; // gotcha #1: no renderer behind a bare socket
             let ok = addr.rsplit_once(':').is_some_and(|(host, port)| {
@@ -322,7 +346,8 @@ pub fn parse_printers(spec: &str) -> Result<Vec<Printer>, String> {
                 ));
             }
         }
-        out.push(Printer::new(name, can_pdf, target));
+        let paper = can_pdf && !target.starts_with("file://");
+        out.push(Printer::new(name, can_pdf, target).with_scale(scale.filter(|_| paper)));
     }
     Ok(out)
 }
@@ -339,7 +364,8 @@ pub fn expressible_name(name: &str) -> bool {
 
 /// Printers -> the `printers` value, the inverse of [`parse_printers`]. Entries are joined with
 /// ` ; `. `|pdf` is left out for `socket://` and `file://` targets because the parser sets it
-/// itself. A name or target the grammar cannot hold is an error naming it.
+/// itself, and a scaling word is written only after `|pdf`. A name or target the grammar cannot
+/// hold, or a scaling word outside [`SCALES`], is an error naming it.
 pub fn format_printers(printers: &[Printer]) -> Result<String, String> {
     let mut entries = Vec::new();
     for p in printers {
@@ -360,6 +386,18 @@ pub fn format_printers(printers: &[Printer]) -> Result<String, String> {
         let mut entry = p.name.clone();
         if p.can_pdf && !implied {
             entry.push_str("|pdf");
+            if let Some(s) = &p.scale {
+                if !SCALES.contains(&s.as_str()) {
+                    return Err(format!(
+                        "unknown scaling {} for printer {}: expected one of {}",
+                        repr_str(s),
+                        repr_str(&p.name),
+                        SCALES.join(", ")
+                    ));
+                }
+                entry.push('|');
+                entry.push_str(s);
+            }
         }
         if p.target != p.name {
             entry.push_str(" = ");
@@ -725,6 +763,30 @@ mod tests {
     }
 
     #[test]
+    fn a_pdf_printer_takes_one_of_the_four_scaling_words() {
+        let ps = parse_printers("a|pdf|fit ; b|pdf|SHRINK ; c|pdf|noscale = q ; d|pdf|stretch ; e|pdf")
+            .unwrap();
+        let scales: Vec<_> = ps.iter().map(|p| p.scale.as_deref()).collect();
+        assert_eq!(
+            scales,
+            [Some("fit"), Some("shrink"), Some("noscale"), Some("stretch"), None]
+        );
+        assert!(ps.iter().all(|p| p.can_pdf));
+        assert_eq!(ps[2].target, "q");
+    }
+
+    #[test]
+    fn scaling_is_dropped_where_no_pdf_reaches_paper() {
+        let ps = parse_printers(
+            "raw|fit ; net|pdf|fit = socket://h:9100 ; dir|pdf|fit = file:///srv/out ; odd|pdf|sideways",
+        )
+        .unwrap();
+        assert!(ps.iter().all(|p| p.scale.is_none()), "{ps:?}");
+        // the pdf tag still counts next to a word the agent does not know, as before
+        assert!(ps[3].can_pdf);
+    }
+
+    #[test]
     fn test_parse_printers_socket_target() {
         let ps = parse_printers("Bixolon ; netz = socket://10.0.0.5:9100").unwrap();
         assert_eq!(
@@ -985,6 +1047,15 @@ mod tests {
     }
 
     #[test]
+    fn scaling_stays_on_this_machine_and_is_not_registered() {
+        let p = Printer::new("HP", true, "HP").with_scale(Some("fit"));
+        assert_eq!(
+            p.to_json(),
+            json!({"name": "HP", "can_pdf": true, "target": "HP"})
+        );
+    }
+
+    #[test]
     fn format_printers_round_trips() {
         let list = vec![
             Printer::new("Zebra GK420d", false, "Zebra GK420d"),
@@ -992,11 +1063,30 @@ mod tests {
             Printer::new("Büro Drucker", true, "Büro Drucker"),
             Printer::new("warehouse", false, "socket://192.168.1.50:9100"),
             Printer::new("archive", true, "file:///srv/out"),
+            Printer::new("Brother", true, "Brother").with_scale(Some("noscale")),
+            Printer::new("Canon", true, "queue").with_scale(Some("fit")),
         ];
         assert_eq!(
             parse_printers(&format_printers(&list).unwrap()).unwrap(),
             list
         );
+    }
+
+    #[test]
+    fn format_printers_writes_scaling_after_pdf_and_refuses_an_unknown_word() {
+        let list = [
+            Printer::new("b", true, "b").with_scale(Some("shrink")),
+            Printer::new("c", true, "queue").with_scale(Some("stretch")),
+            // no pdf, so no paper scaling to write
+            Printer::new("r", false, "r").with_scale(Some("fit")),
+        ];
+        assert_eq!(
+            format_printers(&list).unwrap(),
+            "b|pdf|shrink ; c|pdf|stretch = queue ; r"
+        );
+        let e = format_printers(&[Printer::new("b", true, "b").with_scale(Some("zoom"))])
+            .unwrap_err();
+        assert!(e.contains("zoom") && e.contains("fit, shrink, noscale, stretch"), "{e}");
     }
 
     #[test]

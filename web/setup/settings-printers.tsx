@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import type { AgentStatus } from "./api";
 import { Actions, Notice } from "./bits";
+import { SCALES } from "./model";
 
 /** The printers the agent reports. Changing them is the printer step of the setup, applied as a change. */
 export function PrintersSection({ status, onChange }: { status: AgentStatus | null; onChange: () => void }) {
@@ -16,7 +17,7 @@ export function PrintersSection({ status, onChange }: { status: AgentStatus | nu
       <CardHeader>
         <CardTitle>Printers</CardTitle>
         <CardDescription>
-          Add or remove printers, change their kind, print a test. You will be asked for administrator
+          Add or remove printers, change their kind and page scaling, print a test. You will be asked for administrator
           rights once.
         </CardDescription>
       </CardHeader>
@@ -35,6 +36,7 @@ export function PrintersSection({ status, onChange }: { status: AgentStatus | nu
                 {p.locked && <Badge variant="secondary">set by hand</Badge>}
                 {p.target?.startsWith("socket://") && <Badge variant="secondary">network</Badge>}
                 <Badge variant="outline">{p.pdf ? "PDF" : "raw"}</Badge>
+                {p.scale && <Badge variant="outline">{SCALES.find((s) => s.value === p.scale)?.label ?? p.scale}</Badge>}
               </li>
             ))}
           </ul>

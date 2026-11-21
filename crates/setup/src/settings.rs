@@ -97,6 +97,9 @@ struct PrinterFile {
     name: String,
     pdf: bool,
     target: String,
+    /// Missing from the files of older agents, which had no scaling.
+    #[serde(default)]
+    scale: Option<String>,
 }
 
 /// The state with the same rules as the tray icon (`tray::read_state`: a missing file or a broken
@@ -135,7 +138,11 @@ pub fn parse_status(text: Option<&str>, now: f64) -> AgentStatus {
         printers: file
             .printers
             .iter()
-            .map(|p| printer_to_choice(&Printer::new(&p.name, p.pdf, &p.target)))
+            .map(|p| {
+                printer_to_choice(
+                    &Printer::new(&p.name, p.pdf, &p.target).with_scale(p.scale.as_deref()),
+                )
+            })
             .collect(),
         timeout: file.timeout,
         header_names: file.header_names,
@@ -344,7 +351,7 @@ mod tests {
                 {"name": "Zebra GK420d", "pdf": false, "target": "Zebra GK420d"},
                 {"name": "Lager", "pdf": false, "target": "socket://10.0.0.5:9100"},
                 {"name": "Kasse", "pdf": false, "target": "file:///tmp/bon.prn"},
-                {"name": "HP", "pdf": true, "target": "HP"}
+                {"name": "HP", "pdf": true, "target": "HP", "scale": "fit"}
             ],
             "timeout": 60.0,
             "header_names": ["cf-access-client-id"],
@@ -414,10 +421,10 @@ mod tests {
         assert_eq!(
             v["printers"],
             json!([
-                {"name": "Zebra GK420d", "pdf": false, "target": null, "locked": false},
-                {"name": "Lager", "pdf": false, "target": "socket://10.0.0.5:9100", "locked": false},
-                {"name": "Kasse", "pdf": false, "target": "file:///tmp/bon.prn", "locked": true},
-                {"name": "HP", "pdf": true, "target": null, "locked": false}
+                {"name": "Zebra GK420d", "pdf": false, "target": null, "locked": false, "scale": null},
+                {"name": "Lager", "pdf": false, "target": "socket://10.0.0.5:9100", "locked": false, "scale": null},
+                {"name": "Kasse", "pdf": false, "target": "file:///tmp/bon.prn", "locked": true, "scale": null},
+                {"name": "HP", "pdf": true, "target": null, "locked": false, "scale": "fit"}
             ])
         );
     }

@@ -1,15 +1,37 @@
 // printpapi — self-hosted PrintNode alternative. Elastic License 2.0 (see LICENSE).
 // The setup window's rules, free of React and of Tauri so they can be tested.
-import type { AgentStatus, ConfigPatch, FoundPrinter, Platform, PrinterChoice, SetupError } from "./api";
+import type { AgentStatus, ConfigPatch, FoundPrinter, Platform, PrinterChoice, Scale, SetupError } from "./api";
 
-/** `printers` in agent.ini is `name[=target][|pdf]` joined by `;`, so these cannot appear in a name. */
+/** `printers` in agent.ini is `name[|pdf[|scale]][=target]` joined by `;`, so these cannot appear in a name. */
 const NAME_FORBIDDEN = /[;=|]/;
 const HOST = /^[A-Za-z0-9.-]+$/;
 
 export const DEFAULT_RAW_PORT = 9100;
 
+/** The scaling menu of a PDF printer: "Not set" sends nothing, the rest are SumatraPDF's words. */
+export const SCALES: { value: Scale | null; label: string; help: string }[] = [
+  { value: null, label: "Not set", help: "Nothing is sent. SumatraPDF uses its own default." },
+  { value: "fit", label: "Fit to paper", help: "Every page scaled up or down to fill the paper." },
+  { value: "shrink", label: "Shrink to fit", help: "Only pages too big for the paper are scaled down." },
+  { value: "noscale", label: "Actual size", help: "Printed at 100%, never scaled." },
+  { value: "stretch", label: "Stretch", help: "Fills the paper both ways. The page can look squashed." },
+];
+
+/**
+ * Scaling is a SumatraPDF setting, so Windows only, and only for a printer that takes PDF through
+ * its driver: not a raw or network printer, not one set by hand in agent.ini.
+ */
+export function showsScaling(platform: Platform, p: PrinterChoice): boolean {
+  return platform === "windows" && p.pdf && !p.locked && !(p.target?.startsWith("socket://") ?? false);
+}
+
+/** A printer that becomes raw has no paper scaling, so it loses what it had. */
+export function withKind(p: PrinterChoice, pdf: boolean): PrinterChoice {
+  return { ...p, pdf, scale: pdf ? p.scale : null };
+}
+
 export function fromFound(found: FoundPrinter[]): PrinterChoice[] {
-  return found.map((f) => ({ name: f.name, pdf: false, target: null, locked: false }));
+  return found.map((f) => ({ name: f.name, pdf: false, target: null, locked: false, scale: null }));
 }
 
 /** At least one printer must stay chosen. A machine with none found can add a network printer. */
@@ -33,7 +55,7 @@ export function addNetworkPrinter(
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("The port must be a number from 1 to 65535.");
   }
-  return [...list, { name: n, pdf: false, target: `socket://${host}:${port}`, locked: false }];
+  return [...list, { name: n, pdf: false, target: `socket://${host}:${port}`, locked: false, scale: null }];
 }
 
 /** SumatraPDF prints PDFs on Windows only. */
@@ -155,7 +177,7 @@ export type Settings = {
   headers: [string, string | null][];
 };
 
-const printerKey = (list: PrinterChoice[]) => JSON.stringify(list.map((p) => [p.name, p.pdf, p.target]));
+const printerKey = (list: PrinterChoice[]) => JSON.stringify(list.map((p) => [p.name, p.pdf, p.target, p.scale]));
 
 /**
  * What differs between two states, as the patch the agent applies to its `agent.ini`: only the

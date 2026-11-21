@@ -53,6 +53,9 @@ _CUPS_DUPLEX = {"long-edge": "two-sided-long-edge", "short-edge": "two-sided-sho
 # 90 degrees, and before 3.5 it is ignored, which leaves portrait turning that page 270 (measured
 # on 3.4.6, 3.5.2, 3.6.1; the rule is in Sumatra's src/Print.cpp). 'auto' sends nothing.
 _SUMATRA_ORIENTATION = {"portrait": "portrait", "landscape": "landscape"}
+# SumatraPDF's page scaling words. A PDF printer names one in agent.ini ('HP|pdf|fit'); print_job
+# adds it to the job's options as 'scale'. Without one nothing is sent (Sumatra's own default).
+SCALES = ("fit", "shrink", "noscale", "stretch")
 
 
 def _sumatra_settings(options):
@@ -71,6 +74,10 @@ def _sumatra_settings(options):
     orientation = options.get("orientation", "auto")
     if orientation != "auto":
         parts.append(_SUMATRA_ORIENTATION[orientation])
+    if "scale" in options:
+        if options["scale"] not in SCALES:
+            raise ValueError(f"unknown scale value {options['scale']!r}")
+        parts.append(options["scale"])
     return ",".join(parts)
 
 
@@ -234,23 +241,27 @@ def select_backend(platform=sys.platform, sumatra="SumatraPDF.exe"):
 
 
 def parse_printers(spec):
-    """agent.ini 'printers' (semicolon-separated) -> [{name, can_pdf, target}].
-    Grammar: name [|pdf] [= target].
+    """agent.ini 'printers' (semicolon-separated) -> [{name, can_pdf, target[, scale]}].
+    Grammar: name [|pdf [|scale]] [= target], scale one of SCALES.
       - no '='  -> target is the name (a CUPS queue / Windows printer).
       - '= socket://host:port' -> agent opens a raw TCP socket to it.
       - '= file:///path/to/dir' -> agent writes the job into that directory (no paper).
     Append '|pdf' to declare a document printer PDF-capable; default is raw-only so a label
     printer is never auto-sent a PDF (gotcha #1). A socket:// target is always raw-only, a
-    file:// target always takes both (a directory cannot misrender anything)."""
+    file:// target always takes both (a directory cannot misrender anything).
+    A scaling word after '|pdf' is kept only for a PDF printer with paper behind it (not socket://
+    or file://), as 'scale'. A tag the agent does not know is skipped, as it always was."""
     out = []
     for entry in spec.split(";"):
         left, _, target = entry.partition("=")
-        name, _, tag = left.strip().partition("|")
+        name, *tags = left.split("|")
         name = name.strip()
         if not name:
             continue
         target = target.strip() or name
-        can_pdf = tag.strip().lower() == "pdf"
+        tags = [t.strip().lower() for t in tags]
+        can_pdf = "pdf" in tags
+        scale = next((t for t in reversed(tags) if t in SCALES), None)
         if target.startswith("socket://"):
             can_pdf = False  # gotcha #1: no renderer behind a bare socket
             addr = target[len("socket://"):]
@@ -263,7 +274,10 @@ def parse_printers(spec):
             if not file_target_dir(target).strip():
                 raise ValueError(
                     f"invalid file printer target {target!r} for {name!r}: expected file:///path/to/dir")
-        out.append({"name": name, "can_pdf": can_pdf, "target": target})
+        p = {"name": name, "can_pdf": can_pdf, "target": target}
+        if scale and can_pdf and not target.startswith("file://"):
+            p["scale"] = scale
+        out.append(p)
     return out
 
 
@@ -300,7 +314,9 @@ def _post(url, key, body):
 
 
 def register(base, key, name, printers, http_post=_post):
-    return http_post(base + "/agent/register", key, {"name": name, "printers": printers})
+    # 'scale' is a setting of this machine, not something the server knows
+    sent = [{k: v for k, v in p.items() if k != "scale"} for p in printers]
+    return http_post(base + "/agent/register", key, {"name": name, "printers": sent})
 
 
 def _log_error(msg):
@@ -373,6 +389,9 @@ def print_job(mode, entry, data, copies=1, options=None, raw_fn=raw_to_printer,
     target = entry["target"]
     if mode not in ("raw", "pdf"):
         raise ValueError(f"bad mode: {mode}")
+    if mode == "pdf" and entry.get("scale"):
+        # the printer's scaling (agent.ini '|pdf|fit') goes along as one more option
+        options = {**(options or {}), "scale": entry["scale"]}
     # ponytail: loop the whole send per copy — correct on every backend without a per-driver
     # copies flag (win32/Sumatra/CUPS/socket differ). Native flags (lp -n, Sumatra "Nx") would
     # be one call instead of N; not worth the branching for the small copy counts labels use.

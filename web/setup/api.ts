@@ -9,7 +9,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 export type Platform = "windows" | "macos" | "linux";
 export type InstallState = "none" | "managed" | "foreign" | "unsupported";
 export type FoundPrinter = { name: string; per_user: boolean; usable: boolean };
-export type PrinterChoice = { name: string; pdf: boolean; target: string | null; locked: boolean };
+/** SumatraPDF's page scaling words (`SCALES` in crates/agent/src/config.rs). */
+export type Scale = "fit" | "shrink" | "noscale" | "stretch";
+/** `scale` null is "Not set": nothing is sent and SumatraPDF uses its own default. */
+export type PrinterChoice = { name: string; pdf: boolean; target: string | null; locked: boolean; scale: Scale | null };
 export type Existing = { serverUrl: string; name: string; printers: PrinterChoice[] };
 export type SetupError = { code: string; message: string };
 /** What the agent says about itself (its status file, readable without administrator rights). */

@@ -406,7 +406,7 @@ mod tests {
         let calls = calls.borrow();
         assert_eq!(
             calls[0],
-            "register https://x k agent [Printer { name: \"p\", can_pdf: false, target: \"p\", capabilities: None }]"
+            "register https://x k agent [Printer { name: \"p\", can_pdf: false, target: \"p\", capabilities: None, scale: None }]"
         );
         // "registered" only once the printers are bound, right before the poll
         assert_eq!(calls[1], "registered");

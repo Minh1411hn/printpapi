@@ -1,7 +1,7 @@
 // printpapi — self-hosted PrintNode alternative. Elastic License 2.0 (see LICENSE).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_RAW_PORT, addNetworkPrinter, canLeavePrinters, canSwitchOn, canTest, connectMayHelp, errorText, fromFound, lastJobText, logLocation, needsNewName, needsSumatra, patchFor, pathParts, returnsToConnect, statusWord, timeoutProblem } from "./model.ts";
+import { DEFAULT_RAW_PORT, SCALES, addNetworkPrinter, canLeavePrinters, canSwitchOn, canTest, connectMayHelp, errorText, fromFound, lastJobText, logLocation, needsNewName, needsSumatra, patchFor, pathParts, returnsToConnect, showsScaling, statusWord, timeoutProblem, withKind } from "./model.ts";
 import type { FoundPrinter, PrinterChoice } from "./api.ts";
 
 const choice = (over: Partial<PrinterChoice> = {}): PrinterChoice => ({
@@ -9,7 +9,43 @@ const choice = (over: Partial<PrinterChoice> = {}): PrinterChoice => ({
   pdf: false,
   target: null,
   locked: false,
+  scale: null,
   ...over,
+});
+
+test("the scaling menu is Not set and SumatraPDF's four words", () => {
+  assert.deepEqual(
+    SCALES.map((s) => s.value),
+    [null, "fit", "shrink", "noscale", "stretch"],
+  );
+  assert.equal(SCALES[0].label, "Not set");
+});
+
+test("found and network printers start with no scaling", () => {
+  assert.equal(fromFound([{ name: "HP", per_user: false, usable: true }])[0].scale, null);
+  assert.equal(addNetworkPrinter([], "Dock", "10.0.0.7", 9100)[0].scale, null);
+});
+
+test("scaling is offered for a PDF printer on Windows only", () => {
+  const hp = choice({ pdf: true });
+  assert.equal(showsScaling("windows", hp), true);
+  assert.equal(showsScaling("linux", hp), false);
+  assert.equal(showsScaling("macos", hp), false);
+  assert.equal(showsScaling("windows", choice()), false);
+  assert.equal(showsScaling("windows", choice({ pdf: true, locked: true })), false);
+  assert.equal(showsScaling("windows", choice({ pdf: true, target: "socket://10.0.0.5:9100" })), false);
+});
+
+test("a printer switched to raw drops its scaling, one switched to PDF keeps what it had", () => {
+  assert.deepEqual(withKind(choice({ pdf: true, scale: "fit" }), false), choice({ pdf: false, scale: null }));
+  assert.deepEqual(withKind(choice({ scale: null }), true), choice({ pdf: true, scale: null }));
+  assert.deepEqual(withKind(choice({ pdf: true, scale: "noscale" }), true), choice({ pdf: true, scale: "noscale" }));
+});
+
+test("a changed scaling is a change of the printers", () => {
+  const before = { printers: [choice({ pdf: true })] };
+  const after = { printers: [choice({ pdf: true, scale: "shrink" })] };
+  assert.deepEqual(patchFor(before, after), after);
 });
 
 test("every found printer starts as raw", () => {
@@ -19,10 +55,10 @@ test("every found printer starts as raw", () => {
   ];
   const list = fromFound(found);
   assert.deepEqual(
-    list.map((p) => [p.name, p.pdf, p.target, p.locked]),
+    list.map((p) => [p.name, p.pdf, p.target, p.locked, p.scale]),
     [
-      ["Zebra GK420d", false, null, false],
-      ["HP LaserJet", false, null, false],
+      ["Zebra GK420d", false, null, false, null],
+      ["HP LaserJet", false, null, false, null],
     ],
   );
 });

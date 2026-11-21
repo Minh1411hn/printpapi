@@ -10,15 +10,18 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EmptyState, FieldLabel } from "@/components/bits";
-import { setup, toSetupError, type FoundPrinter, type Platform, type PrinterChoice } from "./api";
+import { setup, toSetupError, type FoundPrinter, type Platform, type PrinterChoice, type Scale } from "./api";
 import {
   DEFAULT_RAW_PORT,
+  SCALES,
   addNetworkPrinter,
   canLeavePrinters,
   canSwitchOn,
   errorText,
   fromFound,
   needsSumatra,
+  showsScaling,
+  withKind,
 } from "./model";
 import { Actions, Notice } from "./bits";
 
@@ -75,7 +78,11 @@ export function StepPrinters({
   }
 
   function setKind(name: string, pdf: boolean) {
-    onChange(selected.map((s) => (s.name === name ? { ...s, pdf } : s)));
+    onChange(selected.map((s) => (s.name === name ? withKind(s, pdf) : s)));
+  }
+
+  function setScale(name: string, scale: Scale | null) {
+    onChange(selected.map((s) => (s.name === name ? { ...s, scale } : s)));
   }
 
   function addNetwork(e: React.FormEvent) {
@@ -128,8 +135,10 @@ export function StepPrinters({
               <PrinterRow
                 key={row.name}
                 row={row}
+                platform={platform}
                 onToggle={(on) => toggle(row, on)}
                 onKind={(pdf) => setKind(row.name, pdf)}
+                onScale={(scale) => setScale(row.name, scale)}
               />
             ))}
           </ul>
@@ -218,14 +227,21 @@ export function StepPrinters({
   );
 }
 
+/** Radix Select takes no empty value, so "Not set" (null) has a word of its own here. */
+const NOT_SET = "none";
+
 function PrinterRow({
   row,
+  platform,
   onToggle,
   onKind,
+  onScale,
 }: {
   row: Row;
+  platform: Platform;
   onToggle: (on: boolean) => void;
   onKind: (pdf: boolean) => void;
+  onScale: (scale: Scale | null) => void;
 }) {
   const { choice, found } = row;
   const locked = choice?.locked ?? false;
@@ -233,6 +249,8 @@ function PrinterRow({
   const on = choice !== null;
   const kind = choice?.pdf ? "pdf" : "raw";
   const network = choice?.target?.startsWith("socket://") ?? false;
+  const scaling = choice !== null && showsScaling(platform, choice);
+  const scale = SCALES.find((s) => s.value === (choice?.scale ?? null)) ?? SCALES[0];
 
   return (
     <li className="rounded-lg border px-3 py-2">
@@ -268,6 +286,30 @@ function PrinterRow({
         )}
       </div>
       {on && !locked && !network && <p className="mt-1 text-xs text-muted-foreground">{KINDS[kind].help}</p>}
+      {scaling && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="text-xs text-muted-foreground">Page scaling</span>
+          <Select
+            value={scale.value ?? NOT_SET}
+            onValueChange={(v) => onScale(v === NOT_SET ? null : (v as Scale))}
+          >
+            <SelectTrigger size="sm" aria-label={`Page scaling of ${row.name}`} className="w-44">
+              <SelectValue>{scale.label}</SelectValue>
+            </SelectTrigger>
+            <SelectContent position="popper" align="start" className="w-64">
+              {SCALES.map((s) => (
+                <SelectItem key={s.value ?? NOT_SET} value={s.value ?? NOT_SET}>
+                  <span className="flex flex-col items-start">
+                    <span>{s.label}</span>
+                    <span className="text-xs text-muted-foreground">{s.help}</span>
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span className="text-xs text-muted-foreground">{scale.help}</span>
+        </div>
+      )}
       {locked && (
         <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
           <Lock className="size-3" /> Set up by hand in agent.ini. Kept as it is.

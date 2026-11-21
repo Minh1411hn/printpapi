@@ -146,11 +146,17 @@ still the smallest surface.
 
 ### Printer syntax
 
-`name [|pdf] [= target]`, semicolon-separated:
+`name [|pdf [|scale]] [= target]`, semicolon-separated:
 
 - Plain name → a Windows printer name or CUPS queue; jobs print through it.
 - `|pdf` → declares the printer PDF-capable. **Default is raw-only**, so a label printer is
   never sent a PDF by accident.
+- `|pdf|scale` → how SumatraPDF fits each page of a PDF job to the paper, Windows only:
+  `fit` (scale up or down to fill the paper), `shrink` (scale down only pages that are too big),
+  `noscale` (100 %) or `stretch` (fill the paper both ways, ignoring the aspect ratio). Without
+  it nothing is sent and SumatraPDF uses its own default. The setup window sets it per printer
+  (*Page scaling*). It stays on the machine (the server never sees it) and does nothing on CUPS,
+  on `socket://` or on `file://`. Example: `HP LaserJet|pdf|fit`.
 - `= socket://host:port` → the agent opens a raw TCP socket (e.g. a network label printer's
   `:9100`). Always raw-only — a bare socket has no renderer.
 - `= file:///path/to/dir` → the agent writes the job into that directory instead of printing it

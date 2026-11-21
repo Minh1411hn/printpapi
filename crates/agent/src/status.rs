@@ -229,6 +229,7 @@ impl Status {
                     p.can_pdf,
                     &mask_key(p.target, &key),
                 )
+                .with_scale(p.scale.as_deref())
             })
             .collect();
         let name = cfg
@@ -277,7 +278,7 @@ pub fn render(s: &Status) -> String {
         "last_contact": s.last_contact,
         "last_job": s.last_job.map(|(id, ok, at)| json!({"id": id, "ok": ok, "at": at})),
         "printers": s.printers.iter()
-            .map(|p| json!({"name": p.name, "pdf": p.can_pdf, "target": p.target}))
+            .map(|p| json!({"name": p.name, "pdf": p.can_pdf, "target": p.target, "scale": p.scale}))
             .collect::<Vec<Value>>(),
         "timeout": s.timeout,
         "header_names": s.header_names,
@@ -481,7 +482,7 @@ mod tests {
     fn config() -> Config {
         Config::from_text(&format!(
             "[agent]\nserver_url = https://print.example.com/\napi_key = {KEY}\nname = PACKTISCH-1\n\
-             printers = Zebra GK420d; Brother | pdf = Brother QL\ntimeout = 45\n\
+             printers = Zebra GK420d; Brother | pdf | fit = Brother QL\ntimeout = 45\n\
              [headers]\nCF-Access-Client-Id = {HEADER_VALUE}\n"
         ))
         .unwrap()
@@ -534,8 +535,8 @@ mod tests {
         assert_eq!(
             v["printers"],
             serde_json::json!([
-                {"name": "Zebra GK420d", "pdf": false, "target": "Zebra GK420d"},
-                {"name": "Brother", "pdf": true, "target": "Brother QL"}
+                {"name": "Zebra GK420d", "pdf": false, "target": "Zebra GK420d", "scale": null},
+                {"name": "Brother", "pdf": true, "target": "Brother QL", "scale": "fit"}
             ])
         );
         assert_eq!(v["timeout"], 45.0);

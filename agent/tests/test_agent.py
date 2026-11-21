@@ -334,6 +334,51 @@ def test_parse_printers_pdf_is_opt_in_default_raw():
     ]
 
 
+def test_parse_printers_pdf_printer_takes_a_scaling_word():
+    ps = print_agent.parse_printers("a|pdf|fit ; b|pdf|SHRINK ; c|pdf|noscale = q ; d|pdf|stretch ; e|pdf")
+    assert [p.get("scale") for p in ps] == ["fit", "shrink", "noscale", "stretch", None]
+    assert all(p["can_pdf"] for p in ps) and ps[2]["target"] == "q"
+
+
+def test_parse_printers_scaling_is_dropped_where_no_pdf_reaches_paper():
+    ps = print_agent.parse_printers(
+        "raw|fit ; net|pdf|fit = socket://h:9100 ; dir|pdf|fit = file:///srv/out ; odd|pdf|sideways")
+    assert all("scale" not in p for p in ps)
+    assert ps[3]["can_pdf"]  # the pdf tag still counts next to a word the agent does not know
+
+
+def test_register_leaves_the_scaling_on_this_machine():
+    sent = {}
+    printers = [{"name": "HP", "can_pdf": True, "target": "HP", "scale": "fit"}]
+    print_agent.register("https://x", "k", "pc", printers,
+                         http_post=lambda url, key, body: sent.update(body))
+    assert sent["printers"] == [{"name": "HP", "can_pdf": True, "target": "HP"}]
+    assert printers[0]["scale"] == "fit"  # the agent's own list keeps it
+
+
+def test_print_job_pdf_carries_the_scaling_of_its_printer():
+    seen = []
+    entry = {"name": "HP", "can_pdf": True, "target": "HP", "scale": "noscale"}
+    pdf_fn = lambda t, d, o=None: seen.append(o)
+    print_agent.print_job("pdf", entry, b"%PDF", raw_fn=lambda *a: None, pdf_fn=pdf_fn)
+    print_agent.print_job("pdf", entry, b"%PDF", options={"paper": "A4"},
+                          raw_fn=lambda *a: None, pdf_fn=pdf_fn)
+    assert seen == [{"scale": "noscale"}, {"paper": "A4", "scale": "noscale"}]
+
+
+def test_sumatra_settings_maps_scale():
+    for v in ("fit", "shrink", "noscale", "stretch"):
+        assert print_agent._sumatra_settings({"scale": v}) == v
+    assert print_agent._sumatra_settings({"paper": "A4", "scale": "fit"}) == "paper=A4,fit"
+    with pytest.raises(ValueError, match="scale"):
+        print_agent._sumatra_settings({"scale": "zoom"})
+
+
+def test_cups_gets_no_scale_flag():
+    # scaling is a SumatraPDF setting; CUPS gets nothing for it (Windows only)
+    assert print_agent._lp_options({"scale": "fit"}) == []
+
+
 def test_parse_printers_socket_target():
     ps = print_agent.parse_printers("Bixolon ; netz = socket://10.0.0.5:9100")
     assert ps == [
